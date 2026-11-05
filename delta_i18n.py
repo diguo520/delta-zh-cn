@@ -609,9 +609,11 @@ def do_sync(exe, out_path, dict_path, dry=False):
         print("没有任何可应用的补丁。")
         return
     out = apply_plan(pe, plan)
-    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-    with open(out_path, "wb") as f:
-        f.write(out)
+    try:
+        with open(out_path, "wb") as f:
+            f.write(out)
+    except PermissionError:
+        sys.exit(f"无法写入 {out_path}：文件可能正在被 Delta 使用，请先关闭 delta-cn.exe 再重试。")
     print(f"已生成中文版：{out_path}（官方文件 {exe} 未改动）")
 
 
@@ -687,14 +689,15 @@ def main():
     ap.add_argument("cmd", choices=["sync", "apply", "check", "restore", "dump"])
     ap.add_argument("--exe", default=None, help="官方 delta-app.exe 路径（默认自动探测常见安装位置）")
     ap.add_argument("--out", default=None, help="sync 输出的中文版 exe 路径（默认与官方同目录 delta-cn.exe）")
+    ap.add_argument("--dry-run", action="store_true", help="只报告，不写文件")
     ap.add_argument("--dict", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "translations.json"))
     a = ap.parse_args()
     exe = a.exe or default_exe()
     if a.cmd == "sync":
         out = a.out or os.path.join(os.path.dirname(os.path.abspath(exe)), "delta-cn.exe")
-        do_sync(exe, out, a.dict)
+        do_sync(exe, out, a.dict, dry=a.dry_run)
     elif a.cmd == "apply":
-        do_apply(exe, a.dict, dry=False)
+        do_apply(exe, a.dict, dry=a.dry_run)
     elif a.cmd == "check":
         do_apply(exe, a.dict, dry=True)
     elif a.cmd == "restore":

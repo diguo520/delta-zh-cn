@@ -1,2 +1,5 @@
+# Windows / Linux（PE / ELF 补丁）
 capstone>=5.0
-numpy; platform_system == "Darwin"
+
+# macOS（Mach-O 补丁）
+numpy; sys_platform == "darwin"

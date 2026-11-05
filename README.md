@@ -1,100 +1,164 @@
 # Delta 简体中文汉化包
 
-<p align="center">面向 Zed Industries Delta 的二进制非侵入式简体中文语言补丁（Windows x64 + macOS arm64）</p>
+<p align="center">面向 Zed Industries Delta 的二进制非侵入式简体中文语言补丁（Windows x64 / macOS arm64 / Linux x64）</p>
 
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-22C55E?style=flat-square" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/Platform-Windows%20x64%20%7C%20macOS%20arm64-4B5563?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4B5563?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/Python-3.8%2B-3776AB?style=flat-square" alt="Python: 3.8+">
-  <img src="https://img.shields.io/badge/Translations-880%2B-F59E0B?style=flat-square" alt="Translations: 880+">
+  <img src="https://img.shields.io/badge/Translations-2020-D97706?style=flat-square" alt="Translations">
 </p>
 
-Delta 是一款闭源的 AI 编程 Agent 客户端（Windows / macOS）。由于应用未提供官方语言包机制，界面文本直接硬编码编译在主程序二进制中。
+Delta 是一款闭源的 AI 编程 Agent 客户端（Windows / macOS / Linux / Web）。由于应用未提供官方语言包机制，界面文本直接硬编码编译在主程序二进制中。
 
 本项目通过静态分析二进制指令流与重定位表，实现精准的原位替换与安全内存搬迁，在完全不需要源码、不破坏核心功能的前提下，为 Delta 提供平滑自然的简体中文体验。
 
-## Windows x64 版（新增）
+## 平台支持
 
-Windows 版工具 `delta_i18n.py` 现已支持 Windows x64 PE 二进制：
+| 平台 | 目标文件 | 工具 | 状态 |
+|---|---|---|---|
+| Windows x64 | `delta.exe`（PE） | `delta_i18n.py` | ✅ 已实测（Delta 0.24.0） |
+| Linux x64 | `delta`（ELF） | `delta_i18n.py` | ✅ ELF 解析已实现，x86-64 逻辑与 Windows 共通 |
+| macOS arm64 | `Delta.app/Contents/MacOS/delta`（Mach-O） | `delta_i18n_macos.py` | ✅ 原版实现（1150+ 词条，含签名处理） |
 
-| 项目 | 说明 |
+> 同一份 `translations.json` 词典服务三平台：Windows / Linux 共用 x86-64 引用分析逻辑，macOS 使用 arm64 的 `adrp+add` 分析。
+
+## 核心能力
+
+| 能力 | 说明 |
 |---|---|
-| 支持目标 | `delta-app.exe`（约 151 MB，x64 PE） |
-| 引用分析 | `lea reg, [rip+disp32]`（取地址）+ `mov r32, imm32`（长度立即数）+ DIR64 重定位胖指针 |
-| 原位替换 | 译文不超长时直接覆写字符串字节，零宽字符补齐 |
-| 安全搬迁 | 译文超长时写入 .rdata 已验证无引用的填充区（约 1.5 MB 可用），改写 lea disp32 与长度立即数 |
-| 比较点保护 | 内联 memcmp（SSE 比较模式）引用的字符串保持原英文字节，比较逻辑不受影响 |
-| 校验和 | 自动重算 PE CheckSum；Windows 无需代码签名 |
-| 覆盖率 | 1954 词典条目中 1764 条可译（90%），剩余为运行时拼装或第三方库内部文本 |
+| 非侵入式补丁 | 仅修改界面静态字符串与引用，不改动网络传输、会话逻辑与 AI 协作机制 |
+| 原位替换 | 译文不超长时直接覆写字节，用零宽字符（U+200B / U+034F / U+E0001）补齐对齐 |
+| 安全搬迁 | 译文超长时写入已验证无引用的填充区并改写所有引用（Windows/Linux: `lea disp32` + 长度立即数；macOS: `adrp+add` + `movz`） |
+| 比较点保护 | 内联 memcmp / SSE 比较引用的字符串保持原英文字节 |
+| 独立启动器 | Windows 生成 `delta-cn.exe`，官方程序零改动，自动更新互不影响 |
+| 幂等 | 重复执行 `sync` 始终从官方原版生成，不会叠加补丁 |
+| 一键还原 | `restore` 从备份恢复官方原版 |
 
-### Windows 快速使用（推荐：delta-cn.exe 独立启动器）
+## 快速使用
 
-Delta 0.24.0 起官方启动程序为 `delta.exe`。推荐做法是**生成独立的中文启动器** `delta-cn.exe`，
-官方 `delta.exe` 保持原样、照常自动更新，两者互不影响（类似 zed.exe / zedG.exe）：
+### Windows x64
 
 ```bash
-# 以官方英文 delta.exe 为源，生成中文版 delta-cn.exe（官方文件不改动）
+pip install capstone
+
+# 生成中文启动器 delta-cn.exe（官方 delta.exe 完全不动）
 python delta_i18n.py sync
 
-# 指定路径（默认自动探测 D:\AI工具\Delta\delta.exe）
+# 指定路径
 python delta_i18n.py sync --exe "D:\AI工具\Delta\delta.exe" --out "D:\AI工具\Delta\delta-cn.exe"
+
+# 只看报告，不写文件
+python delta_i18n.py sync --dry-run
 ```
 
-之后：
+之后双击 `delta-cn.exe` 进入中文界面；`delta.exe` 保持英文并照常自动更新。
+**Delta 升级不会影响 `delta-cn.exe`**（安装器只覆盖官方清单内文件）；升级后重跑 `sync` 即可刷新。
 
-- 双击 `delta-cn.exe` 启动中文界面；
-- 双击 `delta.exe` 启动官方英文界面（自动更新照常）；
-- **Delta 升级更新不会影响 delta-cn.exe** —— 更新器只会覆盖官方文件，中文启动器不在其清单内；
-- Delta 升级后想用新版中文，重新执行一次 `sync` 即可（增量覆盖 delta-cn.exe）。
-
-### Windows 快速使用（旧式：原地补丁）
+### Linux x64
 
 ```bash
-python delta_i18n.py apply      # 直接改官方文件（会被自动更新还原，不推荐）
-python delta_i18n.py restore    # 还原官方文件
-python delta_i18n.py check      # 只报告
-python delta_i18n.py dump > strings.tsv
+pip install capstone
+
+# 自动探测 /opt/delta/delta 等常见路径
+python delta_i18n.py sync
+
+# 或显式指定
+python delta_i18n.py sync --exe /opt/delta/delta --out /opt/delta/delta-cn
 ```
 
+生成 `delta-cn`（ELF 无校验和，无需重签名），直接运行即可。
 
+### macOS arm64
 
-补丁前自动备份原版程序到 `~/.delta-zh-cn/`；Delta 自动更新覆盖主程序后重新执行 `apply` 即可。
+```bash
+pip3 install numpy
 
-命令：`python delta_i18n.py apply [--exe <路径>]`，其余 check / restore / dump 与 macOS 版一致。
+python3 delta_i18n_macos.py apply     # 应用补丁（自动备份 + ad-hoc 重签名）
+python3 delta_i18n_macos.py check     # 只报告
+python3 delta_i18n_macos.py restore   # 还原
+python3 delta_i18n_macos.py make-cert # 创建固定证书，避免钥匙串反复询问
+```
 
----
+## 覆盖情况
 
-## macOS arm64 版（原版）
+当前词典 **2020 条**，在 Delta 0.24.0（Windows x64）上实际生效 **1792 条**。
+
+无法汉化的部分（非工具缺陷，属静态补丁的固有限制）：
+
+- **快捷键动作名与分类名**：二进制中只存在 action ID（如 `project_panel::CollapseAllEntries`），显示文本由 GPUI 在运行时生成。
+- **运行时拼装文本**：如 `Delete Thread`、`Copy as JSON`，由动作 ID 拼接而成，二进制中无完整静态字符串。
+- **极短词**：中文最少 2 字（6 字节）长于英文 4–5 字节，且无长度立即数可搬迁，故保留英文。
+
+## 词条贡献
+
+词典为扁平的 `{"英文原文": "中文翻译"}` 映射，键必须与二进制中的字符串逐字节一致。
+
+```bash
+python delta_i18n.py dump > strings.tsv   # 导出当前二进制中可翻译的字符串
+python delta_i18n.py sync --dry-run       # 校验覆盖率与跳过原因
+```
+
+1. 编辑 `translations.json` 增补词条；
+2. `sync --dry-run` 确认能命中；
+3. 提交 Pull Request。
+
+### 核心术语对照
+
+| 英文 | 译名 | 英文 | 译名 |
+|---|---|---|---|
+| Thread | 会话 | Subagent | 子代理 |
+| Worktree | 工作树 | Checkout | 检出目录 |
+| Runner | 运行器 | Review | 审查 |
+| Pane | 窗格 | Command Palette | 命令面板 |
+| Profile | 配置档案 | Compaction | 压缩上下文 |
+| Fork | 分支副本 | Provider | 服务商 |
 
 ## 架构与工作原理
 
-补丁工具 `delta_i18n.py` 内部处理管道如下：
+### Windows / Linux（x86-64）
+
+```text
+┌──────────────────────────┐         ┌─────────────────────────┐
+│ delta.exe / delta (ELF)  │         │   translations.json     │
+│ .text / .rdata / .reloc  │         │     界面词条词典        │
+└────────────┬─────────────┘         └────────────┬────────────┘
+             │                                    │
+             └──────────────────┬─────────────────┘
+                                ▼
+┌──────────────────────────────────────────────────────────────┐
+│                        delta_i18n                            │
+│  1. 解析容器：PE 节表/重定位/校验和 或 ELF 节区/.rela.dyn      │
+│  2. 扫描 .text 引用：                                        │
+│     • lea rip+disp32 + mov imm32(len) + call（标签构造）      │
+│     • lea + mov [mem],reg + mov [mem+8],imm32（结构体字段）   │
+│     • 重定位表胖指针 (ptr, len)                              │
+│  3. 原位替换（零宽补齐）或搬迁到只读区空洞并改写引用          │
+│  4. PE：重算 CheckSum；ELF：无需校验和                       │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### macOS（arm64）
 
 ```text
 ┌─────────────────────────┐         ┌─────────────────────────┐
 │    Delta.app (arm64)    │         │    translations.json    │
-│    Mach-O Executable    │         │     1150+ Dict Keys     │
+│    Mach-O Executable    │         │     1100+ Dict Keys     │
 └────────────┬────────────┘         └────────────┬────────────┘
              │                                   │
              └─────────────────┬─────────────────┘
-                               │
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                        delta_i18n                           │
-│                                                             │
+│                      delta_i18n_macos                       │
 │  1. Scan & Parse Mach-O Binary                              │
 │     - Instructions: adrp + add / adrp + ldr                 │
 │     - Data Segment: __DATA_CONST chained fixups             │
-│                                                             │
 │  2. Apply Patching Strategy                                 │
 │     - Text <= Orig: In-place overwrite (zero-width padding) │
-│     - Text >  Orig: Relocate to alignment gaps (~14 KB)     │
-│                                                             │
+│     - Text >  Orig: Relocate to alignment gaps              │
 │  3. Rewrite Pointer References & Register Lengths           │
-│                                                             │
 │  4. Restore Entitlements & Ad-hoc Re-sign (codesign)        │
 └──────────────────────────────┬──────────────────────────────┘
-                               │
                                ▼
                 ┌─────────────────────────────┐
                 │    Delta Localized (zh)     │
@@ -102,129 +166,31 @@ python delta_i18n.py dump > strings.tsv
                 └─────────────────────────────┘
 ```
 
-1. **定位字符串**：扫描 `__TEXT,__text` 段中的 `adrp + add` 与 `adrp + ldr` 指令序列、附近计算长度的 `movz`，以及 `__DATA_CONST` 段中经 chained fixups 重定位的 `(ptr, len)` 胖指针，确定字面量的绝对物理偏移与读取长度。
-2. **原位替换**：译文字节数不超过原文时直接原地覆写，不足字节用渲染不可见的零宽字符（U+200B / U+034F / U+E0001）补全，并执行 UTF-8 切断保护与内联立即数覆盖分析。
-3. **空间搬迁**：译文字节数超出原文时，将其写入 Mach-O 头部余量及 `__TEXT` / `__DATA_CONST` 段末尾的对齐空洞（约 14 KB），并同步改写所有寄存器与胖指针引用。
-4. **重新签名**：调用 `codesign --sign -` 重新执行 ad-hoc 签名，保持原有 entitlements 与硬化运行时一致。
+## macOS 权限说明
 
-## 效果展示
+macOS 严格限制对 `/Applications` 中已安装 App 文件的直接就地写操作。当工具检测到权限不足时，会自动启用副本替换策略（复制 Delta.app 到临时目录打补丁后整包原子替换），无需手动调整系统 SIP 或文件权限。若启动时弹出 Gatekeeper 提示，在访达（Finder）中右键点击 Delta.app 并选择「打开」即可。
 
-| 外观设置 | 通用设置 |
-|---|---|
-| ![Delta 外观设置界面](./assets/screenshot_appearance.png) | ![Delta 通用设置界面](./assets/screenshot_general.png) |
-
-## 环境要求
-
-- 操作系统：macOS（Apple Silicon / arm64 架构）
-- 目标软件：已安装 [Delta.app](https://delta.dev)
-- 运行环境：Python 3 及 numpy 库
-
-## 快速安装
-
-```bash
-git clone https://github.com/245678000000/delta-zh-cn.git
-cd delta-zh-cn
-pip3 install -r requirements.txt
-```
-
-## 快速启动
-
-1. 彻底退出正在运行的 Delta 应用程序。
-2. 执行补丁应用命令：
-
-```bash
-python3 delta_i18n.py apply
-```
-
-3. 重新打开 Delta，即可进入中文界面。
-
-如需还原为官方英文原版，执行：
-
-```bash
-python3 delta_i18n.py restore
-```
-
-## 常用命令
-
-| 命令 | 说明 |
-|---|---|
-| `python3 delta_i18n.py apply` | 应用中文补丁，自动备份原版程序并完成重签名 |
-| `python3 delta_i18n.py check` | 模拟检测模式，只输出可替换/无法替换词条报告，不修改任何文件 |
-| `python3 delta_i18n.py restore` | 从备份目录恢复官方原版程序 |
-| `python3 delta_i18n.py dump > strings.tsv` | 导出当前 Delta 二进制中所有可翻译的英文字符串至 TSV 文件 |
-
-### Delta 自动更新后的处理
-
-Delta 自动更新后，官方安装包会覆盖主程序并恢复为英文界面。此时只需重新执行：
-
-```bash
-python3 delta_i18n.py apply
-```
-
-工具采用动态指令扫描机制，不依赖固定内存地址，可适配后续多数常规小版本更新。
-
-### macOS 权限说明
-
-macOS 严格限制对 `/Applications` 中已安装 App 文件的直接就地写操作。当工具检测到权限不足时，会自动启用副本替换策略（复制 Delta.app 到临时目录打补丁后整包原子替换），无需手动调整系统 SIP 或文件权限。若启动时弹出 Gatekeeper 提示，在访达（Finder）中右键点击 Delta.app 并选择"打开"即可。
-
-### 钥匙串反复询问「Delta 想要访问你的钥匙串中的密钥」
+### 钥匙串反复询问
 
 Delta 的登录凭据存在钥匙串里，钥匙串按代码签名身份授权。汉化后签名变了，首次启动会询问一次，点「始终允许」即可。
-但 ad-hoc 签名每次打补丁都会变，为了只授权一次，推荐创建一张固定的自签名证书：
+ad-hoc 签名每次打补丁都会变，为了只授权一次，推荐创建一张固定的自签名证书：
 
 ```bash
-python3 delta_i18n.py make-cert     # 会弹一次输入登录密码的对话框
-python3 delta_i18n.py apply         # 之后 apply 自动用这张证书签名
+python3 delta_i18n_macos.py make-cert
 ```
 
 证书只存在于你的登录钥匙串（名称 `Delta zh-CN Patch`），不影响系统信任链，可随时在「钥匙串访问」里删除。
 
 ## 已知限制
 
-- **极短词汇保留英文**：4 至 5 字节的极短单词（如 `Pane`、`Code`、`Theme`、`Copy`、`Proxy`），因中文单字需占用 3 字节 UTF-8 编码，无法在严格受限的字节长度内完成原位替换，且其汇编引用形式无法安全搬迁，此类词汇会保持英文显示。
-- **运行时动态拼接文本**：命令面板中的部分动作（例如 `Edit Global Rules`、`Send Comment`）为运行时根据 Action Identifier 动态拼装生成，二进制中不存在完整静态字符串，无法通过静态补丁修改。
-- **多重引用冲突词条**：若某一词条在二进制中存在多处实例，且其中某处引用被判定为搬迁不安全，为保证程序稳定将放弃对该处进行替换。
-- **设置页标题与部分状态词保留英文**：设置窗口按页标题字符串（`General`、`Thread`、`Skills` 等）匹配页面内容，且这类比较被编译成立即数常量，无法修改；同理，`Connection`、`Version`、`Private` 这类既是界面文字又可能作为 HTTP 头 / 序列化值的单词也刻意不翻译（工具会按引用来源 crate 自动过滤）。
-- **架构支持**：目前仅支持 macOS arm64 架构二进制。
+- **运行时动态拼接文本**：命令面板中的部分动作（如 `Edit Global Rules`、`Send Comment`）为运行时根据 Action Identifier 动态拼装生成，二进制中不存在完整静态字符串。
+- **快捷键界面**：动作名与分类名均由 action ID 在运行时转换显示，无法静态汉化。
+- **极短词汇**：`Pane`、`Copy`、`Proxy` 等 4–5 字节短词，中文至少 6 字节，无法原位替换且引用处无长度立即数，保留英文。
+- **设置页标题比较**：设置窗口按页标题字符串匹配页面内容，这类比较被编译成立即数常量，部分状态词（如 `Connection`）刻意不翻译。
+- **多重引用冲突**：某词条若存在多处实例且某处引用无法安全改写，为保证程序稳定会放弃该处替换。
 
-## 参与维护与词典贡献
+## 参与维护与声明
 
-词典保存在 `translations.json`，结构为扁平的 `{"英文原文": "中文翻译"}` 映射表。键名必须与二进制中的提取内容完全一致。
-
-1. 导出最新版本的待翻译词条：
-
-```bash
-python3 delta_i18n.py dump > strings.tsv
-```
-
-2. 编辑更新 `translations.json` 后，使用测试模式验证兼容性：
-
-```bash
-python3 delta_i18n.py check
-```
-
-3. 验证无误后提交 Pull Request。
-
-### 核心术语对照表
-
-| 英文原词 | 推荐译名 |
-|---|---|
-| Thread | 会话 |
-| Subagent | 子代理 |
-| Worktree | 工作树 |
-| Runner | 运行器 |
-| Review | 审查 |
-| Pane | 窗格 |
-| Command Palette | 命令面板 |
-| Profile | 配置档案 |
-| Compaction | 压缩上下文 |
-| Checkout | 检出目录 |
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=245678000000%2Fdelta-zh-cn&type=Date)](https://star-history.com/#245678000000/delta-zh-cn&Date)
-
-## 开源协议与声明
-
-- 本项目的工具脚本与词典文件采用 [MIT License](./LICENSE) 授权。
+- 工具脚本与词典采用 [MIT License](./LICENSE) 授权。
 - Delta 商标及客户端所有权归 Zed Industries 所有。本项目为第三方开源语言补丁，不包含、不分发任何 Delta 原始二进制文件。
+- Releases 中仅包含补丁脚本与词典，不含任何官方程序。

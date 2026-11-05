@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-r"""Delta (Zed Industries) 简体中文汉化补丁工具 —— Windows x64 版。
+r"""Delta (Zed Industries) 简体中文汉化补丁工具 —— Windows x64 / Linux x64 版。
 
 Delta 是闭源的 Rust/GPUI 应用，界面文字被直接编译进主程序二进制，没有任何
 语言包机制。本工具的做法（移植自 macOS arm64 版 delta-zh-cn）：
 
-1. 解析 PE（x64），找出所有对 .rdata 里字符串字面量的引用：
+1. 解析 PE / ELF（x64），找出所有对只读数据节区里字符串字面量的引用：
    - 代码里的 lea reg, [rip+disp32]（取地址）+ 附近给出长度的立即数：
      * P1: mov r32, imm32(len) 后接 call（GPUI SharedString/label 构造）
      * P2: mov [base+off], ptrreg 后接 mov qword [base+off+8], imm32(len)
@@ -161,6 +161,109 @@ class PE:
         sum_ = (sum_ & 0xFFFF) + (sum_ >> 16)
         checksum = sum_ + limit
         struct.pack_into("<I", buf, self.checksum_fo, checksum)
+
+
+class ELF:
+    """ELF64 小端（Linux x64 版 Delta 的格式）。
+
+    对外接口与 PE 保持一致：文本节区统一叫 ".text"、只读数据节区统一叫 ".rdata"、
+    重定位节区统一叫 ".reloc"。
+    """
+
+    def __init__(self, data: bytes):
+        self.data = data
+        if data[:4] != b"\x7fELF":
+            sys.exit("不是 ELF 文件")
+        if data[4] != 2:
+            sys.exit("只支持 ELF64")
+        if data[5] != 1:
+            sys.exit("只支持小端 ELF")
+        e_shoff = struct.unpack_from("<Q", data, 0x28)[0]
+        e_shentsize = struct.unpack_from("<H", data, 0x3A)[0]
+        e_shnum = struct.unpack_from("<H", data, 0x3C)[0]
+        e_shstrndx = struct.unpack_from("<H", data, 0x3E)[0]
+        if e_shoff == 0 or e_shnum == 0:
+            sys.exit("ELF 缺少节区表")
+        # 节区名表
+        shstr_hdr = e_shoff + e_shstrndx * e_shentsize
+        shstr_off = struct.unpack_from("<Q", data, shstr_hdr + 0x18)[0]
+        shstr_size = struct.unpack_from("<Q", data, shstr_hdr + 0x20)[0]
+        shstr = data[shstr_off:shstr_off + shstr_size]
+
+        self.image_base = 0   # RELATIVE 重定位的 r_addend 已是绝对地址
+        self.sections = {}
+        self.sections_list = []
+        for i in range(e_shnum):
+            h = e_shoff + i * e_shentsize
+            name_off = struct.unpack_from("<I", data, h)[0]
+            end = shstr.find(b"\0", name_off)
+            name = shstr[name_off:end if end >= 0 else len(shstr)].decode("latin1")
+            sh_addr = struct.unpack_from("<Q", data, h + 0x10)[0]
+            sh_offset = struct.unpack_from("<Q", data, h + 0x18)[0]
+            sh_size = struct.unpack_from("<Q", data, h + 0x20)[0]
+            s = {"name": name, "vaddr": sh_addr, "vsize": sh_size,
+                 "rsize": sh_size, "rptr": sh_offset}
+            self.sections[name] = s
+            self.sections_list.append(s)
+
+        # 别名：让通用逻辑看到与 PE 相同的名字
+        if ".text" not in self.sections:
+            sys.exit("缺少 .text 节区")
+        if ".rdata" not in self.sections:
+            for cand in (".rodata", ".data.rel.ro"):
+                if cand in self.sections:
+                    self.sections[".rdata"] = self.sections[cand]
+                    break
+        if ".rdata" not in self.sections:
+            sys.exit("缺少 .rodata 节区")
+        if ".reloc" not in self.sections:
+            for cand in (".rela.dyn", ".rel.dyn"):
+                if cand in self.sections:
+                    self.sections[".reloc"] = self.sections[cand]
+                    break
+
+    def va_to_fo(self, va):
+        for s in self.sections_list:
+            if s["vaddr"] <= va < s["vaddr"] + max(s["rsize"], s["vsize"]):
+                return s["rptr"] + (va - s["vaddr"])
+        return None
+
+    def fo_to_va(self, fo):
+        for s in self.sections_list:
+            if s["rptr"] <= fo < s["rptr"] + s["rsize"]:
+                return s["vaddr"] + (fo - s["rptr"])
+        return None
+
+    def reloc_slots(self):
+        """遍历 .rela.dyn 的 R_X86_64_RELATIVE，返回 [(slotFo, targetVA)]。"""
+        out = []
+        sec = self.sections.get(".reloc")
+        if not sec or sec["rsize"] == 0:
+            return out
+        data = self.data
+        p = sec["rptr"]
+        end = p + sec["rsize"]
+        while p + 24 <= end:
+            r_offset, r_info, r_addend = struct.unpack_from("<QQq", data, p)
+            rtype = r_info & 0xFFFFFFFF
+            if rtype == 8:   # R_X86_64_RELATIVE
+                slot_fo = self.va_to_fo(r_offset)
+                if slot_fo is not None:
+                    out.append((slot_fo, r_addend))
+            p += 24
+        return out
+
+    def fix_checksum(self, buf: bytearray):
+        """ELF 没有校验和，无需处理。"""
+
+
+def load_binary(data: bytes):
+    """按魔数自动识别 PE / ELF。"""
+    if data[:2] == b"MZ":
+        return PE(data)
+    if data[:4] == b"\x7fELF":
+        return ELF(data)
+    sys.exit("无法识别的可执行文件格式（支持 Windows PE 与 Linux ELF）")
 
 
 # ---------- 引用分析 ----------
@@ -596,33 +699,50 @@ def apply_plan(pe: PE, plan):
 
 # ---------- 命令 ----------
 def default_exe():
-    """自动探测官方 Delta 启动程序：delta.exe（0.24.0+）或 delta-app.exe（旧版）。"""
-    names = ("delta.exe", "delta-app.exe")
+    """自动探测官方 Delta 启动程序（Windows / macOS / Linux）。"""
     candidates = []
     here = os.path.dirname(os.path.abspath(__file__))
-    for n in names:
+    # 脚本同目录
+    for n in ("delta.exe", "delta-app.exe", "delta"):
         candidates.append(os.path.join(here, n))
-    # D:\AI工具\Delta（用户当前安装位置）
-    for n in names:
-        candidates.append(os.path.join("D:\\AI工具\\Delta", n))
-    # LOCALAPPDATA 常见安装路径
-    la = os.environ.get("LOCALAPPDATA")
-    if la:
-        for d in ("Delta", "Programs\\Delta", "delta.dev"):
-            for n in names:
-                candidates.append(os.path.join(la, d, n))
-    # Program Files
-    for pf in ("C:\\Program Files\\Delta", "C:\\Program Files (x86)\\Delta"):
-        for n in names:
-            candidates.append(os.path.join(pf, n))
+
+    if sys.platform == "win32":
+        # Windows 常见安装位置
+        for n in ("delta.exe", "delta-app.exe"):
+            candidates.append(os.path.join("D:\\AI工具\\Delta", n))
+        la = os.environ.get("LOCALAPPDATA")
+        if la:
+            for d in ("Delta", "Programs\\Delta", "delta.dev"):
+                for n in ("delta.exe", "delta-app.exe"):
+                    candidates.append(os.path.join(la, d, n))
+        for pf in ("C:\\Program Files\\Delta", "C:\\Program Files (x86)\\Delta"):
+            for n in ("delta.exe", "delta-app.exe"):
+                candidates.append(os.path.join(pf, n))
+    elif sys.platform == "darwin":
+        # macOS：Delta.app/Contents/MacOS/delta
+        for app in ("/Applications/Delta.app", os.path.expanduser("~/Applications/Delta.app")):
+            candidates.append(os.path.join(app, "Contents/MacOS/delta"))
+    else:
+        # Linux：常见布局
+        for p in ("/opt/delta/delta", "/usr/lib/delta/delta", "/usr/local/bin/delta",
+                  os.path.expanduser("~/.local/share/delta/delta"),
+                  os.path.expanduser("~/Delta/delta")):
+            candidates.append(p)
+
     for c in candidates:
         if os.path.exists(c):
             return c
     return candidates[0]
 
 
+def default_out_path(exe):
+    """中文版输出路径：与官方程序同目录，Windows 用 delta-cn.exe，其他平台用 delta-cn。"""
+    d = os.path.dirname(os.path.abspath(exe))
+    return os.path.join(d, "delta-cn.exe" if sys.platform == "win32" else "delta-cn")
+
+
 def _pe_sections_fingerprint(data):
-    pe = PE(data)
+    pe = load_binary(data)
     return tuple((s["name"], s["vaddr"], s["vsize"], s["rsize"]) for s in pe.sections_list)
 
 
@@ -660,7 +780,7 @@ def do_sync(exe, out_path, dict_path, dry=False):
     # 输入若是已打补丁的文件则提示（避免二次补丁）
     if "\u5173\u4e8e Delta".encode("utf-8") in data:
         print("警告：输入文件似乎已包含中文补丁。请对官方英文原版执行 sync。")
-    pe = PE(data)
+    pe = load_binary(data)
     table = load_dict(dict_path)
     plan = make_plan(pe, table)
     report(plan, table)
@@ -682,7 +802,7 @@ def do_apply(exe, dict_path, dry):
     if not os.path.exists(exe):
         sys.exit(f"找不到 {exe}")
     data, from_backup = original_binary(exe)
-    pe = PE(data)
+    pe = load_binary(data)
     table = load_dict(dict_path)
     plan = make_plan(pe, table)
     report(plan, table)
@@ -714,7 +834,7 @@ def do_restore(exe):
 
 def do_dump(exe):
     data, _ = original_binary(exe)
-    pe = PE(data)
+    pe = load_binary(data)
     rdata = pe.sections[".rdata"]
     lea_index = build_lea_index(pe)
     # 导出所有有 lea 引用且带长度立即数的可读字符串
@@ -755,7 +875,7 @@ def main():
     a = ap.parse_args()
     exe = a.exe or default_exe()
     if a.cmd == "sync":
-        out = a.out or os.path.join(os.path.dirname(os.path.abspath(exe)), "delta-cn.exe")
+        out = a.out or default_out_path(exe)
         do_sync(exe, out, a.dict, dry=a.dry_run)
     elif a.cmd == "apply":
         do_apply(exe, a.dict, dry=a.dry_run)

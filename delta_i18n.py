@@ -319,6 +319,9 @@ def analyze(pe: PE, want_strings):
         if 0 < ln < 8192:
             fat_by_target.setdefault(tgt, []).append((slot_fo, int(ln)))
 
+    # 所有被引用的地址（用于宽松模式的字符串边界校验）
+    all_targets = set(lea_index.keys()) | set(fat_by_target.keys())
+
     # 字符串出现位置
     lits = {}
     for s in want_strings:
@@ -346,6 +349,16 @@ def analyze(pe: PE, want_strings):
             for slot_fo, ln in fat_by_target.get(va, []):
                 if ln == len(eb):
                     refs.append(("fat", slot_fo, None))
+            # 宽松模式：有 lea 引用但找不到长度立即数 —— 仅在字符串边界可证明时接受（仅原位替换）
+            if not refs:
+                lea_refs = lea_index.get(va, [])
+                if lea_refs:
+                    fo0 = pe.va_to_fo(va)
+                    if fo0 is not None:
+                        nxt = data[fo0 + len(eb)] if fo0 + len(eb) < len(data) else 0
+                        boundary_ok = (nxt < 0x20 or nxt >= 0x7f) or ((va + len(eb)) in all_targets)
+                        if boundary_ok:
+                            refs.append(("lea", lea_refs[0], None))
             key = (s, va)
             if key not in lits:
                 lits[key] = Literal(va, pe.va_to_fo(va), len(eb), s)
@@ -473,6 +486,10 @@ def make_plan(pe: PE, table):
     def refs_safe(lit):
         return all(r[0] in ("lea", "fat") for r in lit.refs)
 
+    def has_len_imm(lit):
+        """搬迁需要所有 lea 引用都能改写长度立即数；宽松模式的 lea (imm=None) 无法搬迁。"""
+        return all((r[0] == "fat") or (r[0] == "lea" and r[2] is not None) for r in lit.refs)
+
     def has_any_ref(lit):
         return any(r[0] in ("lea", "fat") for r in lit.refs)
 
@@ -491,6 +508,8 @@ def make_plan(pe: PE, table):
         for lit in hits:
             if len(zb) <= lit.length:
                 inplace.append((lit, pad_to(zb, lit.length)))
+            elif not has_len_imm(lit):
+                unsafe.append((lit.text, "无长度立即数，无法搬迁"))
             else:
                 regions_needed = True
                 relocs.append((lit, zb))

@@ -1,1 +1,2 @@
-numpy>=1.20
+capstone>=5.0
+numpy; platform_system == "Darwin"

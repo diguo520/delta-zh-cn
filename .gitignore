@@ -3,3 +3,5 @@ __pycache__/
 *.orig
 *.tsv
 .DS_Store
+analysis/
+test_patched.exe

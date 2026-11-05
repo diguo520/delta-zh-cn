@@ -1,27 +1,41 @@
-<h1 align="center">Delta 简体中文汉化包</h1>
+# Delta 简体中文汉化包
 
-<p align="center">面向 Zed Industries Delta (macOS arm64) 的二进制非侵入式简体中文语言补丁</p>
+<p align="center">面向 Zed Industries Delta 的二进制非侵入式简体中文语言补丁（Windows x64 + macOS arm64）</p>
 
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-22C55E?style=flat-square" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/Platform-macOS%20(arm64)-4B5563?style=flat-square" alt="Platform: macOS arm64">
+  <img src="https://img.shields.io/badge/Platform-Windows%20x64%20%7C%20macOS%20arm64-4B5563?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/Python-3.8%2B-3776AB?style=flat-square" alt="Python: 3.8+">
-  <img src="https://img.shields.io/badge/Translations-1150%2B-F59E0B?style=flat-square" alt="Translations: 1150+">
+  <img src="https://img.shields.io/badge/Translations-880%2B-F59E0B?style=flat-square" alt="Translations: 880+">
 </p>
 
-Delta 是一款闭源的 macOS AI 编程 Agent 客户端。由于应用未提供官方语言包机制，界面文本直接硬编码编译在 Mach-O 主程序二进制中。
+Delta 是一款闭源的 AI 编程 Agent 客户端（Windows / macOS）。由于应用未提供官方语言包机制，界面文本直接硬编码编译在主程序二进制中。
 
-本项目通过反汇编解析 arm64 指令流与常量重定位表，实现精准的原位替换与安全内存搬迁，在完全不需要源码、不破坏核心功能的前提下，为 Delta 提供平滑自然的简体中文体验。
+本项目通过静态分析二进制指令流与重定位表，实现精准的原位替换与安全内存搬迁，在完全不需要源码、不破坏核心功能的前提下，为 Delta 提供平滑自然的简体中文体验。
 
-## 特性亮点
+## Windows x64 版（新增）
 
-| 核心特性 | 技术支撑与实际收益 |
+Windows 版工具 `delta_i18n.py` 现已支持 Windows x64 PE 二进制：
+
+| 项目 | 说明 |
 |---|---|
-| 深度本地化覆盖 | 内置 1150+ 经过人工精校的中文词条，覆盖菜单、侧栏、全量设置页、命令面板及交互会话视图 |
-| 非侵入式二进制补丁 | 仅对界面静态字符串与引用做精确补丁，不改动 Delta 网络传输、会话逻辑与 AI 协作机制 |
-| 原位替换与安全搬迁 | 译文不长于原文时以零宽字符补齐对齐；译文更长时安全写入段尾对齐空洞并改写引用地址 |
-| 自动备份与快速还原 | 执行补丁前自动备份原版二进制，提供一键还原命令，随时无损回到英文原版 |
-| 权限自适应与重签名 | 自动处理 macOS 应用程序目录只读保护，补丁后自动生成 ad-hoc 代码签名保证平稳运行 |
+| 支持目标 | `delta-app.exe`（约 151 MB，x64 PE） |
+| 引用分析 | `lea reg, [rip+disp32]`（取地址）+ `mov r32, imm32`（长度立即数）+ DIR64 重定位胖指针 |
+| 原位替换 | 译文不超长时直接覆写字符串字节，零宽字符补齐 |
+| 安全搬迁 | 译文超长时写入 .rdata 已验证无引用的填充区（约 1.5 MB 可用），改写 lea disp32 与长度立即数 |
+| 比较点保护 | 内联 memcmp（SSE 比较模式）引用的字符串保持原英文字节，比较逻辑不受影响 |
+| 校验和 | 自动重算 PE CheckSum；Windows 无需代码签名 |
+| 覆盖率 | 1103 词典条目中 879 条可译（80%），其余为运行时动态拼接文本 |
+
+### Windows 快速使用
+
+补丁前自动备份原版程序到 `~/.delta-zh-cn/`；Delta 自动更新覆盖主程序后重新执行 `apply` 即可。
+
+命令：`python delta_i18n.py apply [--exe <路径>]`，其余 check / restore / dump 与 macOS 版一致。
+
+---
+
+## macOS arm64 版（原版）
 
 ## 架构与工作原理
 

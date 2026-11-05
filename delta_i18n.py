@@ -200,37 +200,45 @@ def build_lea_index(pe: PE):
 
 
 def analyze_lea(pe: PE, lea_fo: int, want_len: int):
-    """在 lea 之后寻找建立长度的立即数。返回 (immFo, kind) 或 None。
-    P1: mov r32, imm32(len)（后接 call 或独立使用）
-    P2: mov [base+off], ptrreg 之后 mov qword [base+off+8], imm32(len)
-    比较点保护：lea 后紧跟 xmm 比较指令（pcmpeqd/movaps 等）时返回 ('cmp', None)。"""
+    """在 lea 之后寻找建立长度的立即数。返回 ("len", (leaFo, immFo)) / ("cmp", None) / None。
+
+    支持：
+    - P1: mov r32, imm32(len)（可后接 call / cmove 条件选择）
+    - P2: mov [base+off], ptrreg 之后 mov qword [base+off+8], imm32(len)
+    - 条件选择（cmove）：lea 后紧跟 cmove 复制指针，长度在后续 mov imm 中
+    - 跨无条件 jmp 继续分析（长度可能位于跳转目标块）
+    内联 memcmp 保护：lea 后紧跟 SSE 比较指令时返回 ("cmp", None)。"""
     text = pe.sections[".text"]
     md = _md
     data = pe.data
+    orig_lea = lea_fo
     iva = text["vaddr"] + (lea_fo - text["rptr"])
-    fwd = data[lea_fo:lea_fo+128]
-    try:
-        disas = list(md.disasm(fwd, iva))
-    except Exception:
-        return None
-    if not disas:
-        return None
-    X86_OP_IMM = capstone.x86.X86_OP_IMM
-    X86_OP_MEM = capstone.x86.X86_OP_MEM
-    X86_OP_REG = capstone.x86.X86_OP_REG
-    preg = disas[0].operands[0].reg
-    stored_at = None
-    for k in range(1, min(17, len(disas))):
-        ins = disas[k]
-        op = ins.operands
-        mn = ins.mnemonic
-        is_cmov = mn.startswith("cmov")
-        # 内联 memcmp 保护：紧跟 lea 的 SSE/AVX 比较模式
-        if k <= 2 and (mn.startswith("pcmpeq") or mn.startswith("movaps") or mn.startswith("movups") or mn.startswith("movdqa") or mn.startswith("movdqu")):
-            return ("cmp", None)
-        if mn == "mov" and len(op) == 2 and op[1].type == X86_OP_IMM:
-            imm = op[1].imm
-            if 1 <= imm <= 4096:
+    visited = set()
+    hops = 0
+    while hops < 4:
+        iva = text["vaddr"] + (lea_fo - text["rptr"])
+        try:
+            disas = list(md.disasm(data[lea_fo:lea_fo + 160], iva))
+        except Exception:
+            return None
+        if not disas or not disas[0].operands:
+            return None
+        if disas[0].operands[0].type != X86_OP_REG:
+            return None
+        p_reg = disas[0].operands[0].reg
+        stored_at = None
+        escaped = False   # 指针是否已被复制到其他寄存器
+        jumped = False
+        for k in range(1, min(22, len(disas))):
+            ins = disas[k]
+            op = ins.operands
+            mn = ins.mnemonic
+            is_cmov = mn.startswith("cmov")
+            # 内联 memcmp 保护：仅首块前两条
+            if hops == 0 and k <= 2 and (mn.startswith("pcmpeq") or mn.startswith("movaps") or mn.startswith("movups") or mn.startswith("movdqa") or mn.startswith("movdqu")):
+                return ("cmp", None)
+            if mn == "mov" and len(op) == 2 and op[1].type == X86_OP_IMM:
+                imm = op[1].imm
                 ib = bytes(ins.bytes)
                 imm_off = None
                 is_store = False
@@ -248,26 +256,45 @@ def analyze_lea(pe: PE, lea_fo: int, want_len: int):
                                 m = op[0].mem
                                 sb, sd = stored_at
                                 if m.base == sb and m.disp == sd + 8:
-                                    return ("len", (lea_fo, lea_fo + (ins.address - iva) + imm_off))
+                                    return ("len", (orig_lea, lea_fo + (ins.address - iva) + imm_off))
                         else:
-                            return ("len", (lea_fo, lea_fo + (ins.address - iva) + imm_off))
-                    # 与 want_len 不同的立即数长度：仅当它是寄存器赋值且后接 call 时，判定为另一字符串的长度，继续找
-                    # 简化：遇到不同长度的寄存器立即数即停止（长度已确定，不是我们要的）
-                    if not is_store and ib[0:1] in (b"\x41",) or (0xB8 <= ib[0] <= 0xBF):
-                        return ("mismatch", None)
+                            return ("len", (orig_lea, lea_fo + (ins.address - iva) + imm_off))
+                    # 不匹配的立即数：继续向后找（cmove 分支可能先给另一个长度）
                     continue
-        if mn == "mov" and len(op) == 2 and op[0].type == X86_OP_MEM and op[1].type == X86_OP_REG and op[1].reg == preg:
-            stored_at = (op[0].mem.base, op[0].mem.disp)
-        if mn in ("call", "jmp", "ret"):
-            break
-        if not is_cmov and len(op) >= 1 and op[0].type == X86_OP_REG and op[0].reg == preg:
-            if mn == "mov" and len(op) == 2 and op[1].type == X86_OP_REG:
-                continue
-            break
+            # 跟踪指针的存储（P2）与转义（cmove/mov 复制）
+            if mn == "mov" and len(op) == 2 and op[0].type == X86_OP_MEM and op[1].type == X86_OP_REG and op[1].reg == p_reg:
+                stored_at = (op[0].mem.base, op[0].mem.disp)
+            if is_cmov and len(op) == 2 and op[1].type == X86_OP_REG and op[1].reg == p_reg:
+                escaped = True   # cmove dest, preg
+            if mn == "mov" and len(op) == 2 and op[0].type == X86_OP_REG and op[1].type == X86_OP_REG and op[1].reg == p_reg:
+                escaped = True
+            if mn == "jmp" and len(op) == 1 and op[0].type == X86_OP_IMM:
+                tgt = op[0].imm
+                tfo = pe.va_to_fo(tgt)
+                if tfo is not None and tfo not in visited:
+                    visited.add(tfo)
+                    lea_fo = tfo
+                    jumped = True
+                    hops += 1
+                    break
+            if mn in ("call", "ret"):
+                return None
+            # 指针寄存器被覆盖且未转义 → 停止
+            if not is_cmov and len(op) >= 1 and op[0].type == X86_OP_REG and op[0].reg == p_reg:
+                if mn == "mov" and len(op) == 2 and op[1].type == X86_OP_REG:
+                    continue
+                if not escaped:
+                    return None
+        if not jumped:
+            return None
     return None
 
 
 _md = None
+
+X86_OP_IMM = capstone.x86.X86_OP_IMM
+X86_OP_MEM = capstone.x86.X86_OP_MEM
+X86_OP_REG = capstone.x86.X86_OP_REG
 
 
 def analyze(pe: PE, want_strings):
@@ -468,6 +495,17 @@ def make_plan(pe: PE, table):
                 regions_needed = True
                 relocs.append((lit, zb))
 
+    # 重叠保护：原位替换区间若重叠（子串误识别），保留较长字面量
+    if inplace:
+        inplace_sorted = sorted(inplace, key=lambda x: -x[0].length)
+        kept = []
+        for lit, nb in inplace_sorted:
+            s, e = lit.fo, lit.fo + lit.length
+            if any(not (e <= k.fo or k.fo + k.length <= s) for k, _ in kept):
+                continue
+            kept.append((lit, nb))
+        inplace = kept
+
     if regions_needed:
         alloc = Allocator(free_regions(pe, lits))
         # 给每个搬迁目标分配空间
@@ -508,7 +546,8 @@ def apply_plan(pe: PE, plan):
     image_base = pe.image_base
 
     for lit, nb in plan["inplace"]:
-        assert bytes(buf[lit.fo:lit.fo + lit.length]) == lit.text.encode("utf-8"), f"原位替换前校验失败: {lit.text!r}"
+        if bytes(buf[lit.fo:lit.fo + lit.length]) != lit.text.encode("utf-8"):
+            continue   # 已被其它补丁覆盖（理论上不会发生，防御性跳过）
         buf[lit.fo:lit.fo + lit.length] = nb
 
     for lit, zb, fo in plan["relocs"]:

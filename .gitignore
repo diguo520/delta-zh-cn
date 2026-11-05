@@ -1,10 +1,16 @@
+# Python
 __pycache__/
 *.pyc
+
+# 构建产物 / 备份 / 临时文件
 *.orig
+*.orig.exe
 *.tsv
-.DS_Store
-analysis/
 test_patched.exe
-.delta-zh-cn/
+delta-cn.exe
+analysis/
+
+# 系统
+.DS_Store
 NVIDIA Corporation/
-screen.png
+.delta-zh-cn/

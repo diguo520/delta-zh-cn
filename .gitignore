@@ -5,3 +5,6 @@ __pycache__/
 .DS_Store
 analysis/
 test_patched.exe
+.delta-zh-cn/
+NVIDIA Corporation/
+screen.png

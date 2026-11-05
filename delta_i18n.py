@@ -39,7 +39,18 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-BACKUP_DIR = os.path.join(os.path.expanduser("~"), ".delta-zh-cn")
+def _home_dir():
+    """备份目录基址：优先 USERPROFILE/HOME，失败时退回 APPDATA 或脚本所在盘。"""
+    for var in ("USERPROFILE", "HOME"):
+        v = os.environ.get(var)
+        if v and os.path.isabs(v):
+            return v
+    v = os.environ.get("APPDATA")
+    if v and os.path.isabs(v):
+        return os.path.dirname(v)
+    return os.path.dirname(os.path.abspath(__file__))
+
+BACKUP_DIR = os.path.join(_home_dir(), ".delta-zh-cn")
 
 # ---------- 零宽填充 ----------
 PAD4 = "\U000E0001".encode()  # 4 字节：Unicode TAG 字符，默认可忽略

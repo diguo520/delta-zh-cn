@@ -553,17 +553,35 @@ def default_exe():
     return candidates[0]
 
 
-def backup_path(exe):
-    import hashlib
-    h = hashlib.sha256(open(exe, "rb").read()).hexdigest()[:12]
-    return os.path.join(BACKUP_DIR, f"delta-{h}.orig.exe")
+def _pe_sections_fingerprint(data):
+    pe = PE(data)
+    return tuple((s["name"], s["vaddr"], s["vsize"], s["rsize"]) for s in pe.sections_list)
+
+
+def backup_dir():
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    return BACKUP_DIR
 
 
 def original_binary(exe):
-    bk = backup_path(exe)
-    if os.path.exists(bk):
-        return open(bk, "rb").read(), True
-    return open(exe, "rb").read(), False
+    """返回未打过补丁的原始程序内容（优先用备份；按 PE 节表指纹匹配，跨补丁幂等）。"""
+    cur = open(exe, "rb").read()
+    try:
+        cur_fp = _pe_sections_fingerprint(cur)
+    except SystemExit:
+        cur_fp = None
+    if os.path.isdir(BACKUP_DIR):
+        for name in sorted(os.listdir(BACKUP_DIR)):
+            if not name.endswith(".orig.exe"):
+                continue
+            path = os.path.join(BACKUP_DIR, name)
+            try:
+                bkdata = open(path, "rb").read()
+                if _pe_sections_fingerprint(bkdata) == cur_fp:
+                    return bkdata, True
+            except Exception:
+                continue
+    return cur, False
 
 
 def do_apply(exe, dict_path, dry):
@@ -580,9 +598,10 @@ def do_apply(exe, dict_path, dry):
         print("没有任何可应用的补丁。")
         return
     out = apply_plan(pe, plan)
-    bk = backup_path(exe)
     if not from_backup:
         os.makedirs(BACKUP_DIR, exist_ok=True)
+        import time
+        bk = os.path.join(BACKUP_DIR, time.strftime("delta-%Y%m%d-%H%M%S.orig.exe"))
         shutil.copy2(exe, bk)
         print(f"已备份原始程序到 {bk}")
     with open(exe, "wb") as f:
@@ -591,10 +610,11 @@ def do_apply(exe, dict_path, dry):
 
 
 def do_restore(exe):
-    bk = backup_path(exe)
-    if not os.path.exists(bk):
-        sys.exit(f"没有备份（{bk}），请重新下载安装 Delta。")
-    shutil.copy2(bk, exe)
+    data, found = original_binary(exe)
+    if not found:
+        sys.exit(f"没有备份（{BACKUP_DIR}），请重新下载安装 Delta。")
+    with open(exe, "wb") as f:
+        f.write(data)
     print("已还原原版程序。")
 
 

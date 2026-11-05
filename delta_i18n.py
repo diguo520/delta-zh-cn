@@ -20,9 +20,12 @@ Delta 是闭源的 Rust/GPUI 应用，界面文字被直接编译进主程序二
 3. 修正 PE 校验和（CheckSum）。Windows 不强制代码签名，无需重签名。
 
 用法：
-    python delta_i18n.py apply   [--exe "D:\AI工具\Delta\delta-app.exe"] [--dict translations.json]
+    python delta_i18n.py sync   [--exe ...] [--out delta-cn.exe] [--dict translations.json]
+           # 从官方英文 delta-app.exe 生成中文 delta-cn.exe（官方文件保持原样，
+           # Delta 升级更新互不影响；升级后重新执行 sync 即可刷新中文版）
     python delta_i18n.py check   [--exe ...] [--dict ...]    # 只报告，不改动
-    python delta_i18n.py restore [--exe ...]                 # 还原成原版程序
+    python delta_i18n.py apply   [--exe ...]                 # 旧式原地补丁（默认不再推荐）
+    python delta_i18n.py restore [--exe ...]                 # 还原官方文件（仅在用过 apply 时）
     python delta_i18n.py dump    [--exe ...] > strings.tsv   # 导出可翻译的字符串
 """
 import argparse, json, os, re, shutil, struct, subprocess, sys, tempfile
@@ -532,21 +535,25 @@ def apply_plan(pe: PE, plan):
 
 # ---------- 命令 ----------
 def default_exe():
-    """自动探测 delta-app.exe：常见安装位置。"""
+    """自动探测官方 Delta 启动程序：delta.exe（0.24.0+）或 delta-app.exe（旧版）。"""
+    names = ("delta.exe", "delta-app.exe")
     candidates = []
-    # 本目录
     here = os.path.dirname(os.path.abspath(__file__))
-    candidates.append(os.path.join(here, "delta-app.exe"))
+    for n in names:
+        candidates.append(os.path.join(here, n))
+    # D:\AI工具\Delta（用户当前安装位置）
+    for n in names:
+        candidates.append(os.path.join("D:\\AI工具\\Delta", n))
     # LOCALAPPDATA 常见安装路径
     la = os.environ.get("LOCALAPPDATA")
     if la:
-        for rel in ("Delta\\delta-app.exe", "Programs\\Delta\\delta-app.exe", "delta.dev\\delta-app.exe"):
-            candidates.append(os.path.join(la, rel))
+        for d in ("Delta", "Programs\\Delta", "delta.dev"):
+            for n in names:
+                candidates.append(os.path.join(la, d, n))
     # Program Files
-    for pf in ("C:\\Program Files\\Delta\\delta-app.exe", "C:\\Program Files (x86)\\Delta\\delta-app.exe"):
-        candidates.append(pf)
-    # D:\AI工具\Delta（用户当前安装位置）
-    candidates.append(r"D:\AI工具\\Delta\\delta-app.exe")
+    for pf in ("C:\\Program Files\\Delta", "C:\\Program Files (x86)\\Delta"):
+        for n in names:
+            candidates.append(os.path.join(pf, n))
     for c in candidates:
         if os.path.exists(c):
             return c
@@ -582,6 +589,30 @@ def original_binary(exe):
             except Exception:
                 continue
     return cur, False
+
+
+def do_sync(exe, out_path, dict_path, dry=False):
+    """从官方英文 delta-app.exe 生成中文 delta-cn.exe 副本（官方文件保持原样）。"""
+    if not os.path.exists(exe):
+        sys.exit(f"找不到 {exe}")
+    data = open(exe, "rb").read()
+    # 输入若是已打补丁的文件则提示（避免二次补丁）
+    if "\u5173\u4e8e Delta".encode("utf-8") in data:
+        print("警告：输入文件似乎已包含中文补丁。请对官方英文原版执行 sync。")
+    pe = PE(data)
+    table = load_dict(dict_path)
+    plan = make_plan(pe, table)
+    report(plan, table)
+    if dry:
+        return
+    if not plan["inplace"] and not plan["relocs"]:
+        print("没有任何可应用的补丁。")
+        return
+    out = apply_plan(pe, plan)
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    with open(out_path, "wb") as f:
+        f.write(out)
+    print(f"已生成中文版：{out_path}（官方文件 {exe} 未改动）")
 
 
 def do_apply(exe, dict_path, dry):
@@ -653,12 +684,16 @@ def do_dump(exe):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["apply", "check", "restore", "dump"])
-    ap.add_argument("--exe", default=None, help="delta-app.exe 路径（默认自动探测常见安装位置）")
+    ap.add_argument("cmd", choices=["sync", "apply", "check", "restore", "dump"])
+    ap.add_argument("--exe", default=None, help="官方 delta-app.exe 路径（默认自动探测常见安装位置）")
+    ap.add_argument("--out", default=None, help="sync 输出的中文版 exe 路径（默认与官方同目录 delta-cn.exe）")
     ap.add_argument("--dict", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "translations.json"))
     a = ap.parse_args()
     exe = a.exe or default_exe()
-    if a.cmd == "apply":
+    if a.cmd == "sync":
+        out = a.out or os.path.join(os.path.dirname(os.path.abspath(exe)), "delta-cn.exe")
+        do_sync(exe, out, a.dict)
+    elif a.cmd == "apply":
         do_apply(exe, a.dict, dry=False)
     elif a.cmd == "check":
         do_apply(exe, a.dict, dry=True)

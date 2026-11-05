@@ -27,7 +27,36 @@ Windows 版工具 `delta_i18n.py` 现已支持 Windows x64 PE 二进制：
 | 校验和 | 自动重算 PE CheckSum；Windows 无需代码签名 |
 | 覆盖率 | 1103 词典条目中 879 条可译（80%），其余为运行时动态拼接文本 |
 
-### Windows 快速使用
+### Windows 快速使用（推荐：delta-cn.exe 独立启动器）
+
+Delta 0.24.0 起官方启动程序为 `delta.exe`。推荐做法是**生成独立的中文启动器** `delta-cn.exe`，
+官方 `delta.exe` 保持原样、照常自动更新，两者互不影响（类似 zed.exe / zedG.exe）：
+
+```bash
+# 以官方英文 delta.exe 为源，生成中文版 delta-cn.exe（官方文件不改动）
+python delta_i18n.py sync
+
+# 指定路径（默认自动探测 D:\AI工具\Delta\delta.exe）
+python delta_i18n.py sync --exe "D:\AI工具\Delta\delta.exe" --out "D:\AI工具\Delta\delta-cn.exe"
+```
+
+之后：
+
+- 双击 `delta-cn.exe` 启动中文界面；
+- 双击 `delta.exe` 启动官方英文界面（自动更新照常）；
+- **Delta 升级更新不会影响 delta-cn.exe** —— 更新器只会覆盖官方文件，中文启动器不在其清单内；
+- Delta 升级后想用新版中文，重新执行一次 `sync` 即可（增量覆盖 delta-cn.exe）。
+
+### Windows 快速使用（旧式：原地补丁）
+
+```bash
+python delta_i18n.py apply      # 直接改官方文件（会被自动更新还原，不推荐）
+python delta_i18n.py restore    # 还原官方文件
+python delta_i18n.py check      # 只报告
+python delta_i18n.py dump > strings.tsv
+```
+
+
 
 补丁前自动备份原版程序到 `~/.delta-zh-cn/`；Delta 自动更新覆盖主程序后重新执行 `apply` 即可。
 

@@ -355,9 +355,12 @@ def analyze(pe: PE, want_strings):
                 if lea_refs:
                     fo0 = pe.va_to_fo(va)
                     if fo0 is not None:
-                        nxt = data[fo0 + len(eb)] if fo0 + len(eb) < len(data) else 0
-                        boundary_ok = (nxt < 0x20 or nxt >= 0x7f) or ((va + len(eb)) in all_targets)
-                        if boundary_ok:
+                        # 原位替换不改变长度，后续字节不受影响。
+                        # 只需排除「本串是更长串的前缀」（这样替换会破坏那个更长串的显示）。
+                        nxt = data[fo0 + len(eb)] if fo0 + len(eb) < len(data) else 0x20
+                        # 后一字节不是字母数字，或正好是另一个已引用串的起点 => 边界可证明
+                        nxt_ok = (nxt < 0x30 or nxt > 0x7a) or ((va + len(eb)) in all_targets)
+                        if nxt_ok:
                             refs.append(("lea", lea_refs[0], None))
             key = (s, va)
             if key not in lits:
